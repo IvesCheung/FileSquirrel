@@ -85,17 +85,18 @@ def load_config(config_path: str = "config.yaml") -> AppConfig:
         quiet_end=quiet_hours.get("end", ScheduleConfig.quiet_end),
     )
 
-    # 组装完整配置
+    # 组装完整配置（用临时实例获取 field 默认值）
+    _defaults = AppConfig()
     config = AppConfig(
         target_directory=raw.get("target_directory", ""),
         model=model_cfg,
         schedule=sched_cfg,
-        allow_rename=raw.get("allow_rename", AppConfig.allow_rename),
-        allow_move=raw.get("allow_move", AppConfig.allow_move),
-        allow_create_dirs=raw.get("allow_create_dirs", AppConfig.allow_create_dirs),
-        whitelist_dirs=raw.get("whitelist_dirs", []),
-        ignore_patterns=raw.get("ignore_patterns", AppConfig.ignore_patterns),
-        organize_requirements=raw.get("organize_requirements", AppConfig.organize_requirements),
+        allow_rename=raw.get("allow_rename", _defaults.allow_rename),
+        allow_move=raw.get("allow_move", _defaults.allow_move),
+        allow_create_dirs=raw.get("allow_create_dirs", _defaults.allow_create_dirs),
+        whitelist_dirs=raw.get("whitelist_dirs", _defaults.whitelist_dirs),
+        ignore_patterns=raw.get("ignore_patterns", _defaults.ignore_patterns),
+        organize_requirements=raw.get("organize_requirements", _defaults.organize_requirements),
     )
 
     _validate(config)
