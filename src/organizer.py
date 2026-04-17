@@ -5,6 +5,7 @@
 所有操作都通过数据库记录，支持回滚。
 """
 
+import logging
 import shutil
 from pathlib import Path
 
@@ -12,6 +13,8 @@ from src.analyzer import OrganizeDecision
 from src.config import AppConfig
 from src.database import Database
 from src.scanner import FileInfo
+
+logger = logging.getLogger("filesquirrel")
 
 
 class Organizer:
@@ -38,12 +41,20 @@ class Organizer:
         success_count = 0
 
         for decision in decisions:
+            logger.debug(
+                f"决策: {decision.original_path} → {decision.target_path} "
+                f"(置信度={decision.confidence:.2f}, 重命名={decision.should_rename}, "
+                f"理由={decision.reason[:80]})"
+            )
+
             # 跳过低置信度决策（保持原位）
             if decision.confidence < 0.3:
+                logger.debug(f"跳过（置信度过低）: {decision.original_path}")
                 continue
 
             # 跳过目标路径与原路径相同的（无需操作）
             if decision.target_path == decision.original_path:
+                logger.debug(f"跳过（路径未变）: {decision.original_path}")
                 continue
 
             file_info = files_map.get(decision.file_hash)
