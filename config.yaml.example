@@ -1,0 +1,40 @@
+# FileSquirrel 配置文件示例
+# 复制为 config.yaml 并根据需要修改
+
+# 监控的目标目录
+target_directory: "D:\\Downloads"
+
+# Ollama 模型配置
+model:
+  name: "gemma3:4b"         # Ollama 中的模型名称
+  base_url: "http://localhost:11434"  # Ollama 服务地址
+  timeout: 120               # 单次请求超时（秒）
+
+# 允许的操作
+allow_rename: true            # 允许重命名文件
+allow_move: true              # 允许移动文件到新目录
+allow_create_dirs: true       # 允许创建新子目录
+
+# 白名单子目录（只整理这些目录下的文件，为空则整理整个 target_directory）
+whitelist_dirs: []
+
+# 忽略的文件模式
+ignore_patterns:
+  - "*.tmp"
+  - "*.part"
+  - ".DS_Store"
+  - "Thumbs.db"
+
+# 整理要求（作为 prompt 的一部分注入给模型）
+organize_requirements: |
+  请按照文件类型和用途进行分类整理。
+  文档放在一起，图片放在一起，代码放在一起。
+  目录名使用中文，文件名保持可读性。
+
+# 闲时调度配置
+schedule:
+  enabled: true
+  idle_minutes: 30            # 电脑空闲多少分钟后开始整理
+  quiet_hours:
+    start: "23:00"            # 允许运行的开始时间
+    end: "07:00"              # 允许运行的结束时间

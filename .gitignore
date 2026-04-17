@@ -1,3 +1,22 @@
 # Claude Code 相关文件
 .claude/
 CLAUDE.md
+
+# 运行时数据
+data/
+logs/
+config.yaml
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+dist/
+build/
+*.egg-info/
+
+# IDE
+.vscode/
+.idea/

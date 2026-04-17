@@ -1,0 +1,4 @@
+# FileSquirrel - 自动文件整理工具依赖
+pyyaml>=6.0
+requests>=2.31
+Pillow>=10.0
