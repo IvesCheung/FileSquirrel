@@ -93,15 +93,24 @@ def run_rollback(batch_id: int | None = None, config_path: str = "config.yaml"):
     db.close()
 
 
-def run_daemon(config_path: str = "config.yaml"):
+def run_daemon(config_path: str = "config.yaml", run_now: bool = False):
     """
     以守护进程模式运行，闲时自动整理。
 
     Args:
         config_path: 配置文件路径
+        run_now: 是否立即执行一次整理（跳过闲时检测）
     """
     logger = setup_logger()
     config = load_config(config_path)
+
+    # --now 模式：立即执行一次，之后进入正常守护循环
+    if run_now:
+        logger.info("--now 模式：立即执行一次整理")
+        try:
+            run_organize(config_path)
+        except Exception as e:
+            logger.error(f"立即整理异常: {e}", exc_info=True)
 
     # 整理函数闭包
     def organize_job():
@@ -175,7 +184,11 @@ def main():
     )
 
     # daemon 命令：以守护进程方式运行，闲时自动整理
-    subparsers.add_parser("daemon", help="以守护进程模式运行，闲时自动整理")
+    daemon_parser = subparsers.add_parser("daemon", help="以守护进程模式运行，闲时自动整理")
+    daemon_parser.add_argument(
+        "--now", action="store_true",
+        help="跳过闲时检测，立即执行一次整理（方便测试）",
+    )
 
     # history 命令：查看操作历史
     subparsers.add_parser("history", help="查看整理操作历史")
@@ -192,7 +205,7 @@ def main():
     elif args.command == "rollback":
         run_rollback(args.batch, args.config)
     elif args.command == "daemon":
-        run_daemon(args.config)
+        run_daemon(args.config, run_now=args.now)
     elif args.command == "history":
         run_history(args.config)
 
