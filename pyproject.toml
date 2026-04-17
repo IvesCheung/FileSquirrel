@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "filesquirrel"
+version = "0.1.0"
+description = "基于本地多模态模型的自动文件整理工具"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "pyyaml>=6.0",
+    "requests>=2.31",
+    "Pillow>=10.0",
+]
+
+[project.scripts]
+filesquirrel = "src.main:main"
+
+[tool.setuptools.packages.find]
+include = ["src*"]

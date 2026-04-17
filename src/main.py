@@ -7,16 +7,77 @@ FileSquirrel 入口文件。
 
 import argparse
 import signal
+import subprocess
 import sys
+from pathlib import Path
 
-from src.config import load_config
-from src.database import Database
-from src.logger import setup_logger
-from src.rollback import RollbackManager
-from src.scheduler import Scheduler
-from src.scanner import Scanner
-from src.analyzer import LLMAnalyzer
-from src.organizer import Organizer
+import requests
+
+
+def check_ollama(base_url: str = "http://localhost:11434") -> bool:
+    """
+    检查 Ollama 服务是否可用。
+
+    如果不可用，尝试自动启动（Windows）。
+
+    Returns:
+        True 表示 Ollama 可用
+    """
+    try:
+        resp = requests.get(f"{base_url}/api/tags", timeout=5)
+        resp.raise_for_status()
+        return True
+    except requests.ConnectionError:
+        pass
+
+    # 尝试自动启动 Ollama
+    print("[FileSquirrel] Ollama 未运行，尝试自动启动...")
+    try:
+        subprocess.Popen(
+            ["ollama", "serve"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        # 等待 Ollama 启动，最多等 30 秒
+        for _ in range(15):
+            import time
+            time.sleep(2)
+            try:
+                resp = requests.get(f"{base_url}/api/tags", timeout=3)
+                resp.raise_for_status()
+                print("[FileSquirrel] Ollama 启动成功")
+                return True
+            except requests.ConnectionError:
+                continue
+    except FileNotFoundError:
+        pass
+
+    print("[FileSquirrel] 错误: Ollama 未安装或无法启动")
+    print("  请先安装 Ollama: https://ollama.com/download")
+    return False
+
+
+def check_config(config_path: str) -> bool:
+    """
+    检查配置文件是否存在，不存在则从示例复制。
+
+    Returns:
+        True 表示配置文件就绪
+    """
+    if Path(config_path).exists():
+        return True
+
+    example = Path("config.yaml.example")
+    if example.exists():
+        print(f"[FileSquirrel] 配置文件 {config_path} 不存在，已从示例复制")
+        print(f"  请编辑 {config_path} 修改 target_directory 等配置后重新运行")
+        import shutil
+        shutil.copy(example, config_path)
+        return False
+    else:
+        print(f"[FileSquirrel] 错误: 找不到 {config_path} 和 config.yaml.example")
+        return False
 
 
 def run_organize(config_path: str = "config.yaml"):
@@ -27,8 +88,15 @@ def run_organize(config_path: str = "config.yaml"):
     Args:
         config_path: 配置文件路径
     """
+    from src.config import load_config
+    from src.database import Database
+    from src.logger import setup_logger
+    from src.scanner import Scanner
+    from src.analyzer import LLMAnalyzer
+    from src.organizer import Organizer
+
     logger = setup_logger()
-    logger.info("="*50)
+    logger.info("=" * 50)
     logger.info("FileSquirrel 整理任务开始")
 
     # 加载配置
@@ -77,6 +145,11 @@ def run_rollback(batch_id: int | None = None, config_path: str = "config.yaml"):
         batch_id: 指定批次 ID，None 则回滚最近一次
         config_path: 配置文件路径
     """
+    from src.config import load_config
+    from src.database import Database
+    from src.logger import setup_logger
+    from src.rollback import RollbackManager
+
     logger = setup_logger()
     config = load_config(config_path)
     db = Database()
@@ -101,6 +174,10 @@ def run_daemon(config_path: str = "config.yaml", run_now: bool = False):
         config_path: 配置文件路径
         run_now: 是否立即执行一次整理（跳过闲时检测）
     """
+    from src.config import load_config
+    from src.logger import setup_logger
+    from src.scheduler import Scheduler
+
     logger = setup_logger()
     config = load_config(config_path)
 
@@ -138,6 +215,9 @@ def run_history(config_path: str = "config.yaml"):
     Args:
         config_path: 配置文件路径
     """
+    from src.config import load_config
+    from src.database import Database
+
     config = load_config(config_path)
     db = Database()
     batches = db.get_batch_history(limit=20)
@@ -198,6 +278,17 @@ def main():
     if args.command is None:
         parser.print_help()
         sys.exit(1)
+
+    # 启动前检查：配置文件
+    if not check_config(args.config):
+        sys.exit(1)
+
+    # 启动前检查：Ollama（history 和 rollback 不需要）
+    if args.command in ("organize", "daemon"):
+        from src.config import load_config
+        config = load_config(args.config)
+        if not check_ollama(config.model.base_url):
+            sys.exit(1)
 
     # 路由到对应命令
     if args.command == "organize":
