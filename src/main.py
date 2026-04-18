@@ -80,13 +80,14 @@ def check_config(config_path: str) -> bool:
         return False
 
 
-def run_organize(config_path: str = "config.yaml"):
+def run_organize(config_path: str = "config.yaml", debug: bool = False):
     """
     执行一次完整的整理流程：
     加载配置 → 扫描增量文件 → LLM 分析 → 执行整理
 
     Args:
         config_path: 配置文件路径
+        debug: 是否在控制台输出 DEBUG 级别日志
     """
     from src.config import load_config
     from src.database import Database
@@ -95,7 +96,7 @@ def run_organize(config_path: str = "config.yaml"):
     from src.analyzer import LLMAnalyzer
     from src.organizer import Organizer
 
-    logger = setup_logger()
+    logger = setup_logger(debug=debug)
     logger.info("=" * 50)
     logger.info("FileSquirrel 整理任务开始")
 
@@ -166,26 +167,27 @@ def run_rollback(batch_id: int | None = None, config_path: str = "config.yaml"):
     db.close()
 
 
-def run_daemon(config_path: str = "config.yaml", run_now: bool = False):
+def run_daemon(config_path: str = "config.yaml", run_now: bool = False, debug: bool = False):
     """
     以守护进程模式运行，闲时自动整理。
 
     Args:
         config_path: 配置文件路径
         run_now: 是否立即执行一次整理（跳过闲时检测）
+        debug: 是否在控制台输出 DEBUG 级别日志
     """
     from src.config import load_config
     from src.logger import setup_logger
     from src.scheduler import Scheduler
 
-    logger = setup_logger()
+    logger = setup_logger(debug=debug)
     config = load_config(config_path)
 
     # --now 模式：立即执行一次，之后进入正常守护循环
     if run_now:
         logger.info("--now 模式：立即执行一次整理")
         try:
-            run_organize(config_path)
+            run_organize(config_path, debug=debug)
         except Exception as e:
             logger.error(f"立即整理异常: {e}", exc_info=True)
 
@@ -251,6 +253,10 @@ def main():
         "--config", "-c", default="config.yaml",
         help="配置文件路径（默认: config.yaml）",
     )
+    parser.add_argument(
+        "--debug", action="store_true",
+        help="在控制台输出 DEBUG 级别日志，显示每个文件的 LLM 决策详情",
+    )
 
     subparsers = parser.add_subparsers(dest="command", help="可用命令")
 
@@ -292,11 +298,11 @@ def main():
 
     # 路由到对应命令
     if args.command == "organize":
-        run_organize(args.config)
+        run_organize(args.config, debug=args.debug)
     elif args.command == "rollback":
         run_rollback(args.batch, args.config)
     elif args.command == "daemon":
-        run_daemon(args.config, run_now=args.now)
+        run_daemon(args.config, run_now=args.now, debug=args.debug)
     elif args.command == "history":
         run_history(args.config)
 

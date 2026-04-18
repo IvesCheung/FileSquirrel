@@ -13,17 +13,19 @@ from pathlib import Path
 DEFAULT_LOG_DIR = Path("logs")
 
 
-def setup_logger(name: str = "filesquirrel", log_dir: str | Path | None = None) -> logging.Logger:
+def setup_logger(name: str = "filesquirrel", log_dir: str | Path | None = None,
+                 debug: bool = False) -> logging.Logger:
     """
     创建并配置 logger。
 
     同时输出到：
-    - 控制台（INFO 级别，简洁格式）
-    - 日志文件（DEBUG 级别，详细格式）
+    - 控制台（默认 INFO 级别，debug=True 时输出 DEBUG 级别）
+    - 日志文件（始终 DEBUG 级别，详细格式）
 
     Args:
         name: logger 名称
         log_dir: 日志文件目录，默认为 logs/
+        debug: 是否在控制台输出 DEBUG 级别日志
 
     Returns:
         配置好的 Logger 对象
@@ -39,9 +41,9 @@ def setup_logger(name: str = "filesquirrel", log_dir: str | Path | None = None) 
 
     logger.setLevel(logging.DEBUG)
 
-    # ── 控制台 handler：INFO 级别，简洁格式 ──────────────
+    # ── 控制台 handler：debug 模式下输出全部日志 ──────────
     console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setLevel(logging.INFO)
+    console_handler.setLevel(logging.DEBUG if debug else logging.INFO)
     console_fmt = logging.Formatter(
         "[%(asctime)s] %(levelname)s - %(message)s",
         datefmt="%H:%M:%S",
