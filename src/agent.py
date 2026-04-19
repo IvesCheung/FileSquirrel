@@ -279,26 +279,36 @@ class FileAgent:
             # 调用 Ollama
             response = self._call_ollama(messages)
 
+            # 打印 LLM 的思考内容
+            msg = response.get("message", {})
+            thinking = msg.get("thinking", "")
+            content = msg.get("content", "")
+            if thinking:
+                logger.debug(f"[Agent] 思考: {thinking[:500]}")
+            if content:
+                logger.info(f"[Agent] 第 {i + 1} 轮: {content[:300]}")
+
             # 检查是否返回 tool_calls
             if response.get("tool_calls"):
                 # 把 assistant 的 tool_calls 消息加入历史
-                messages.append(response["message"])
+                messages.append(msg)
 
                 # 逐个执行 tool
                 for tool_call in response["tool_calls"]:
+                    tool_name = tool_call["function"]["name"]
+                    tool_args = tool_call["function"]["arguments"]
+                    logger.info(f"[Agent] 调用: {tool_name}({tool_args})")
+
                     result = self._execute_tool(tool_call)
                     # 把 tool 结果加入消息历史
                     messages.append({
                         "role": "tool",
-                        "name": tool_call["function"]["name"],
+                        "name": tool_name,
                         "content": result,
                     })
-                    logger.debug(
-                        f"[Agent] tool: {tool_call['function']['name']} → {result[:200]}"
-                    )
+                    logger.info(f"[Agent] 结果: {result[:300]}")
             else:
                 # 没有 tool_calls，检查是否完成
-                content = response.get("message", {}).get("content", "")
                 messages.append({"role": "assistant", "content": content})
 
                 if "DONE" in content.upper() or i > self.config.max_iterations - 5:
