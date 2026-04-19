@@ -15,7 +15,7 @@ import yaml
 @dataclass
 class ModelConfig:
     """Ollama 模型配置。"""
-    name: str = "gemma3:4b"
+    name: str = "qwen3.5:4b"
     base_url: str = "http://localhost:11434"
     timeout: int = 120
 

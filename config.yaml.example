@@ -6,7 +6,7 @@ target_directory: 'C:/Users/zhangjianfeng/Downloads/testing'
 
 # Ollama 模型配置
 model:
-  name: "gemma3:4b"         # Ollama 中的模型名称
+  name: "qwen3.5:4b"         # Ollama 中的模型名称
   base_url: "http://localhost:11434"  # Ollama 服务地址
   timeout: 120               # 单次请求超时（秒）
 
