@@ -38,6 +38,9 @@ class AppConfig:
     allow_rename: bool = True
     allow_move: bool = True
     allow_create_dirs: bool = True
+    allow_delete: bool = False           # 是否允许删除文件（默认关闭）
+    use_agent: bool = False              # 使用 agent 模式（默认线性模式）
+    max_iterations: int = 200            # agent 模式最大推理轮次
     whitelist_dirs: list = field(default_factory=list)
     ignore_patterns: list = field(default_factory=lambda: ["*.tmp", "*.part"])
     organize_requirements: str = "请按照文件类型和用途进行分类整理。"
@@ -94,6 +97,9 @@ def load_config(config_path: str = "config.yaml") -> AppConfig:
         allow_rename=raw.get("allow_rename", _defaults.allow_rename),
         allow_move=raw.get("allow_move", _defaults.allow_move),
         allow_create_dirs=raw.get("allow_create_dirs", _defaults.allow_create_dirs),
+        allow_delete=raw.get("allow_delete", _defaults.allow_delete),
+        use_agent=raw.get("use_agent", _defaults.use_agent),
+        max_iterations=raw.get("max_iterations", _defaults.max_iterations),
         whitelist_dirs=raw.get("whitelist_dirs", _defaults.whitelist_dirs),
         ignore_patterns=raw.get("ignore_patterns", _defaults.ignore_patterns),
         organize_requirements=raw.get("organize_requirements", _defaults.organize_requirements),
