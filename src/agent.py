@@ -311,7 +311,7 @@ class FileAgent:
 
     def _call_ollama(self, messages: list) -> dict:
         """
-        调用 Ollama chat API（支持 tool calling）。
+        调用 Ollama chat API（原生 tool calling）。
 
         Args:
             messages: 对话历史
@@ -334,6 +334,14 @@ class FileAgent:
             resp = requests.post(url, json=payload, timeout=self.config.model.timeout)
             resp.raise_for_status()
             return resp.json()
+        except requests.exceptions.HTTPError as e:
+            error_detail = ""
+            try:
+                error_detail = e.response.json().get("error", e.response.text)
+            except Exception:
+                error_detail = str(e)
+            logger.error(f"[Agent] Ollama 调用失败: {error_detail}")
+            return {"message": {"content": f"ERROR: {error_detail}"}}
         except Exception as e:
             logger.error(f"[Agent] Ollama 调用失败: {e}")
             return {"message": {"content": f"ERROR: {e}"}}
