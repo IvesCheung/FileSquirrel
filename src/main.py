@@ -103,12 +103,12 @@ def run_organize(config_path: str = "config.yaml", debug: bool = False):
     # 加载配置
     config = load_config(config_path)
     logger.info(f"目标目录: {config.target_directory}")
+    mode_label = "Agent" if config.use_agent else "Linear"
+    logger.info(f"整理模式: {mode_label}")
 
-    # 初始化模块
+    # 初始化公共模块
     db = Database()
     scanner = Scanner(config, db)
-    analyzer = LLMAnalyzer(config, db)
-    organizer = Organizer(config, db)
 
     # 扫描增量文件
     logger.info("扫描增量文件...")
@@ -120,19 +120,22 @@ def run_organize(config_path: str = "config.yaml", debug: bool = False):
 
     logger.info(f"发现 {len(new_files)} 个新文件待整理")
 
-    # 获取当前目录结构，供 LLM 参考
-    dir_structure = scanner.get_current_structure()
+    # 根据配置选择整理模式
+    if config.use_agent:
+        from src.agent import FileAgent
+        logger.info("启动 Agent 模式...")
+        agent = FileAgent(config, db)
+        count = agent.run(new_files)
+    else:
+        analyzer = LLMAnalyzer(config, db)
+        organizer = Organizer(config, db)
+        dir_structure = scanner.get_current_structure()
+        files_map = {f.file_hash: f for f in new_files}
+        logger.info("调用本地模型分析文件...")
+        decisions = analyzer.analyze_batch(new_files, dir_structure)
+        logger.info("执行整理操作...")
+        count = organizer.execute_batch(decisions, files_map)
 
-    # 构建 file_hash → FileInfo 映射
-    files_map = {f.file_hash: f for f in new_files}
-
-    # LLM 批量分析
-    logger.info("调用本地模型分析文件...")
-    decisions = analyzer.analyze_batch(new_files, dir_structure)
-
-    # 执行整理
-    logger.info("执行整理操作...")
-    count = organizer.execute_batch(decisions, files_map)
     logger.info(f"整理完成，成功处理 {count} 个文件")
 
     db.close()
