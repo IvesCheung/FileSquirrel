@@ -337,7 +337,9 @@ class FileAgent:
             "stream": False,
             "options": {
                 "temperature": 0.3,
+                "num_predict": 4096,      # 足够的 token 预算给 tool calling
             },
+            "think": False,               # 关闭 thinking，避免思考占满输出
         }
 
         try:
