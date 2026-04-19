@@ -1,8 +1,8 @@
 # FileSquirrel 配置文件示例
 # 复制为 config.yaml 并根据需要修改
 
-# 监控的目标目录
-target_directory: "D:\\Downloads"
+# 监控的目标目录（Windows 路径请用单引号或正斜杠，避免 \ 转义问题）
+target_directory: 'C:/Users/zhangjianfeng/Downloads/testing'
 
 # Ollama 模型配置
 model:
@@ -14,6 +14,11 @@ model:
 allow_rename: true            # 允许重命名文件
 allow_move: true              # 允许移动文件到新目录
 allow_create_dirs: true       # 允许创建新子目录
+allow_delete: false           # 允许删除文件（谨慎开启，默认关闭）
+
+# Agent 模式（LLM 自主调用工具完成整理，更智能但更慢）
+use_agent: true               # true=agent模式, false=线性模式
+max_iterations: 200           # agent 最大推理轮次
 
 # 白名单子目录（只整理这些目录下的文件，为空则整理整个 target_directory）
 whitelist_dirs: []
