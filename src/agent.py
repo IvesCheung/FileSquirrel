@@ -2,17 +2,13 @@
 Agent 模式模块。
 
 LLM 作为 agent 自主调用工具完成文件整理。
-通过 Ollama 的 tool calling 接口，LLM 能：
-  - 查看目录结构和文件信息
-  - 读取文件内容预览
-  - 创建目录、移动、重命名、删除文件
-  - 根据操作结果调整后续策略
-
+采用模拟 tool calling：在 prompt 中描述工具，从模型文本回复中解析 JSON 工具调用。
 所有操作受 config 权限控制，且记录到数据库支持回滚。
 """
 
 import json
 import logging
+import re
 import shutil
 from fnmatch import fnmatch
 from pathlib import Path
@@ -26,174 +22,81 @@ from src.scanner import Scanner, compute_file_hash
 logger = logging.getLogger("filesquirrel")
 
 
-# ── Tool 定义：告诉 LLM 有哪些工具可用 ──────────────────
+# ── 工具描述：用于生成 system prompt 中的工具说明 ──────────────────
 
-TOOL_DEFINITIONS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "list_files",
-            "description": "扫描指定目录，返回其中的文件列表。不传参则扫描目标根目录。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "directory": {
-                        "type": "string",
-                        "description": "要扫描的子目录相对路径（如 '文档'），留空扫描根目录",
-                    },
-                },
-                "required": [],
-            },
+TOOL_SCHEMAS = {
+    "list_files": {
+        "description": "扫描指定目录，返回其中的文件列表。不传参则扫描目标根目录。",
+        "parameters": {
+            "directory": "要扫描的子目录相对路径（如 '文档'），留空扫描根目录",
         },
+        "required": [],
     },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_file_info",
-            "description": "获取文件的详细信息：大小、类型、hash、是否存在。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "文件的相对路径",
-                    },
-                },
-                "required": ["path"],
-            },
+    "get_file_info": {
+        "description": "获取文件的详细信息：大小、类型、hash、是否存在。",
+        "parameters": {
+            "path": "文件的相对路径",
         },
+        "required": ["path"],
     },
-    {
-        "type": "function",
-        "function": {
-            "name": "read_file",
-            "description": "读取文本文件的内容预览（最多 max_chars 个字符）。适用于 txt/md/csv/json/py 等文本文件。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "文件的相对路径",
-                    },
-                    "max_chars": {
-                        "type": "integer",
-                        "description": "最多读取的字符数，默认 2000",
-                    },
-                },
-                "required": ["path"],
-            },
+    "read_file": {
+        "description": "读取文本文件的内容预览（最多 max_chars 个字符）。适用于 txt/md/csv/json/py 等文本文件。",
+        "parameters": {
+            "path": "文件的相对路径",
+            "max_chars": "最多读取的字符数，默认 2000",
         },
+        "required": ["path"],
     },
-    {
-        "type": "function",
-        "function": {
-            "name": "create_directory",
-            "description": "创建新的子目录。路径相对于目标根目录。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "要创建的目录相对路径，如 '论文/2024'",
-                    },
-                },
-                "required": ["path"],
-            },
+    "create_directory": {
+        "description": "创建新的子目录。路径相对于目标根目录。",
+        "parameters": {
+            "path": "要创建的目录相对路径，如 '论文/2024'",
         },
+        "required": ["path"],
     },
-    {
-        "type": "function",
-        "function": {
-            "name": "move_file",
-            "description": "将文件移动到新路径（可以同时实现移动和重命名）。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "src": {
-                        "type": "string",
-                        "description": "源文件相对路径",
-                    },
-                    "dst": {
-                        "type": "string",
-                        "description": "目标相对路径（含文件名）",
-                    },
-                },
-                "required": ["src", "dst"],
-            },
+    "move_file": {
+        "description": "将文件移动到新路径（可以同时实现移动和重命名）。",
+        "parameters": {
+            "src": "源文件相对路径",
+            "dst": "目标相对路径（含文件名）",
         },
+        "required": ["src", "dst"],
     },
-    {
-        "type": "function",
-        "function": {
-            "name": "rename_file",
-            "description": "重命名文件（不改变所在目录）。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "文件相对路径",
-                    },
-                    "new_name": {
-                        "type": "string",
-                        "description": "新文件名（仅文件名，不含路径）",
-                    },
-                },
-                "required": ["path", "new_name"],
-            },
+    "rename_file": {
+        "description": "重命名文件（不改变所在目录）。",
+        "parameters": {
+            "path": "文件相对路径",
+            "new_name": "新文件名（仅文件名，不含路径）",
         },
+        "required": ["path", "new_name"],
     },
-    {
-        "type": "function",
-        "function": {
-            "name": "delete_file",
-            "description": "删除指定文件。此操作不可逆，请谨慎使用。（仅在 allow_delete 开启时可用）",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "要删除的文件相对路径",
-                    },
-                },
-                "required": ["path"],
-            },
+    "delete_file": {
+        "description": "删除指定文件。此操作不可逆，请谨慎使用。（仅在 allow_delete 开启时可用）",
+        "parameters": {
+            "path": "要删除的文件相对路径",
         },
+        "required": ["path"],
     },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_directory_tree",
-            "description": "获取当前完整的目录结构树概览。",
-            "parameters": {
-                "type": "object",
-                "properties": {},
-                "required": [],
-            },
+    "get_directory_tree": {
+        "description": "获取当前完整的目录结构树概览。",
+        "parameters": {},
+        "required": [],
+    },
+    "check_processed": {
+        "description": "检查某个文件是否已经被处理整理过。",
+        "parameters": {
+            "path": "文件相对路径",
         },
+        "required": ["path"],
     },
-    {
-        "type": "function",
-        "function": {
-            "name": "check_processed",
-            "description": "检查某个文件是否已经被处理整理过。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "文件相对路径",
-                    },
-                },
-                "required": ["path"],
-            },
-        },
-    },
-]
+}
+
+# 不受权限控制的工具（始终可用）
+ALWAYS_AVAILABLE = {"list_files", "get_file_info", "read_file", "get_directory_tree", "check_processed"}
 
 
 class FileAgent:
-    """基于 Ollama tool calling 的文件整理 Agent。"""
+    """基于模拟 tool calling 的文件整理 Agent。"""
 
     def __init__(self, config: AppConfig, db: Database):
         self.config = config
@@ -202,19 +105,39 @@ class FileAgent:
         self.batch_id: int | None = None
         self.operation_count = 0
 
-        # 根据权限过滤可用工具
-        self.tools = self._filter_tools()
-
-    def _filter_tools(self) -> list[dict]:
-        """根据 config 权限过滤工具列表。"""
-        available = []
-        for tool in TOOL_DEFINITIONS:
-            name = tool["function"]["name"]
-            # 删除工具仅在 allow_delete 开启时注册
+    def _get_available_tools(self) -> dict:
+        """根据 config 权限过滤可用工具。"""
+        tools = {}
+        for name, schema in TOOL_SCHEMAS.items():
+            # 删除工具仅在 allow_delete 开启时可用
             if name == "delete_file" and not self.config.allow_delete:
                 continue
-            available.append(tool)
-        return available
+            # 重命名/移动/创建目录受各自权限控制
+            if name == "rename_file" and not self.config.allow_rename:
+                continue
+            if name == "move_file" and not self.config.allow_move:
+                continue
+            if name == "create_directory" and not self.config.allow_create_dirs:
+                continue
+            tools[name] = schema
+        return tools
+
+    def _build_tools_description(self) -> str:
+        """生成工具描述文本，嵌入到 system prompt 中。"""
+        tools = self._get_available_tools()
+        lines = []
+        for name, schema in tools.items():
+            params_desc = ""
+            if schema["parameters"]:
+                param_lines = []
+                for pname, pdesc in schema["parameters"].items():
+                    required_mark = "（必填）" if pname in schema["required"] else "（可选）"
+                    param_lines.append(f"    - \"{pname}\": {pdesc} {required_mark}")
+                params_desc = "\n".join(param_lines)
+            else:
+                params_desc = "    （无参数）"
+            lines.append(f"- {name}: {schema['description']}\n{params_desc}")
+        return "\n".join(lines)
 
     def run(self, new_files: list) -> int:
         """
@@ -247,7 +170,10 @@ class FileAgent:
                 + "\n".join(lines) + "\n"
             )
 
-        system_prompt = f"""你是一个文件整理助手。你需要使用提供的工具来整理文件。
+        tools_desc = self._build_tools_description()
+
+        system_prompt = f"""/no_think
+你是一个文件整理助手。你需要使用提供的工具来整理文件。
 
 ## 用户整理要求
 {self.config.organize_requirements}
@@ -258,12 +184,26 @@ class FileAgent:
 - {'允许创建新目录' if self.config.allow_create_dirs else '不允许创建新目录'}
 - {'允许删除文件' if self.config.allow_delete else '不允许删除文件'}
 
+## 可用工具
+{tools_desc}
+
 ## 规则
 1. 所有路径都是相对于目标目录的相对路径
 2. 先用 get_directory_tree 了解当前结构，再决定如何整理
 3. 需要时用 read_file 查看文件内容来辅助判断
 4. 每次操作后检查结果，确保成功再继续
 5. 所有文件处理完后，回复 "DONE" 结束
+
+## 回复格式
+每次回复你必须且只能输出一个 JSON 对象来调用工具，格式如下：
+{{"tool": "工具名", "args": {{"参数名": "参数值"}}}}
+
+示例：
+- 调用 get_directory_tree: {{"tool": "get_directory_tree", "args": {{}}}}
+- 移动文件: {{"tool": "move_file", "args": {{"src": "foo.txt", "dst": "文档/foo.txt"}}}}
+- 创建目录: {{"tool": "create_directory", "args": {{"path": "论文/2024"}}}}
+
+不要输出任何其他文字，只输出 JSON。整理全部完成后回复 DONE。
 
 ## 待整理文件
 {file_list}
@@ -273,79 +213,126 @@ class FileAgent:
         messages = [{"role": "system", "content": system_prompt}]
 
         # Agent 循环
+        last_call_key = ""      # 上一次工具调用的唯一标识
+        repeat_count = 0        # 连续重复次数
+        max_repeat = 3          # 同一操作最多重试次数
+        skipped_calls: set[str] = set()  # 已跳过的失败操作集合
+        consecutive_skips = 0   # 连续命中已跳过操作的次数
+
         for i in range(self.config.max_iterations):
             logger.debug(f"[Agent] 第 {i + 1} 轮推理")
 
             # 调用 Ollama
-            response = self._call_ollama(messages)
+            content = self._call_ollama(messages)
 
-            # 打印 LLM 的思考内容
-            msg = response.get("message", {})
-            thinking = msg.get("thinking", "")
-            content = msg.get("content", "")
-            if thinking:
-                logger.debug(f"[Agent] 思考: {thinking[:500]}")
-            if content:
-                logger.info(f"[Agent] 第 {i + 1} 轮: {content[:300]}")
+            if not content or not content.strip():
+                logger.warning(f"[Agent] 第 {i + 1} 轮: 模型返回空内容，跳过")
+                continue
 
-            # 检查是否返回 tool_calls
-            if response.get("tool_calls"):
-                # 把 assistant 的 tool_calls 消息加入历史
-                messages.append(msg)
+            # 去除 <think/> 标签内容（某些模型仍可能输出）
+            content_clean = re.sub(r'<think[\s\S]*?</think\s*>', '', content).strip()
 
-                # 逐个执行 tool
-                for tool_call in response["tool_calls"]:
-                    tool_name = tool_call["function"]["name"]
-                    tool_args = tool_call["function"]["arguments"]
-                    logger.info(f"[Agent] 调用: {tool_name}({tool_args})")
+            # 去除 /no_think 可能残留的前缀空白
+            content_clean = content_clean.replace('/no_think', '').strip()
 
-                    result = self._execute_tool(tool_call)
-                    # 把 tool 结果加入消息历史
+            logger.info(f"[Agent] 第 {i + 1} 轮: {content_clean[:300]}")
+
+            # 尝试从回复中解析工具调用 JSON
+            tool_call = self._parse_tool_call(content_clean)
+
+            if tool_call:
+                tool_name = tool_call["tool"]
+                tool_args = tool_call.get("args", {})
+
+                # 生成调用唯一标识
+                call_key = f"{tool_name}:{json.dumps(tool_args, sort_keys=True, ensure_ascii=False)}"
+
+                # 已被标记跳过的操作，直接拦截不执行
+                if call_key in skipped_calls:
+                    consecutive_skips += 1
+                    logger.warning(f"[Agent] 已跳过的失败操作 ({consecutive_skips}次): {tool_name}")
+                    if consecutive_skips >= 3:
+                        logger.warning("[Agent] 模型持续重复已跳过的操作，强制结束本轮整理")
+                        break
+                    # 不加入消息历史，避免上下文膨胀
+                    continue
+
+                consecutive_skips = 0  # 成功解析到新操作，重置跳过计数
+
+                # 检测重复调用
+                if call_key == last_call_key:
+                    repeat_count += 1
+                else:
+                    repeat_count = 1
+                    last_call_key = call_key
+
+                if repeat_count > max_repeat:
+                    logger.warning(f"[Agent] 连续 {repeat_count} 次重复调用 {tool_name}，永久跳过")
+                    skipped_calls.add(call_key)
+                    messages.append({"role": "assistant", "content": content_clean})
                     messages.append({
-                        "role": "tool",
-                        "name": tool_name,
-                        "content": result,
+                        "role": "user",
+                        "content": f"你已连续 {repeat_count} 次执行同一操作且失败，该操作已被跳过。请处理下一个文件，或回复 DONE 结束。",
                     })
-                    logger.info(f"[Agent] 结果: {result[:300]}")
-            else:
-                # 没有 tool_calls，检查是否完成
-                messages.append({"role": "assistant", "content": content})
+                    continue
 
-                if "DONE" in content.upper() or i > self.config.max_iterations - 5:
-                    logger.debug("[Agent] Agent 声明完成")
+                logger.info(f"[Agent] 调用: {tool_name}({json.dumps(tool_args, ensure_ascii=False)})")
+
+                # 执行工具
+                result = self._execute_tool(tool_name, tool_args)
+                logger.info(f"[Agent] 结果: {result[:300]}")
+
+                # 把本轮对话加入历史
+                messages.append({"role": "assistant", "content": content_clean})
+                messages.append({"role": "user", "content": f"工具执行结果:\n{result}"})
+            else:
+                # 没有解析到工具调用
+                messages.append({"role": "assistant", "content": content_clean})
+
+                if "DONE" in content_clean.upper():
+                    logger.info("[Agent] Agent 声明完成")
                     break
+                elif i >= self.config.max_iterations - 5:
+                    logger.warning("[Agent] 达到最大轮次，强制结束")
+                    break
+                else:
+                    # 模型可能输出了非 JSON 文本，提醒它继续
+                    messages.append({
+                        "role": "user",
+                        "content": "请用 JSON 格式调用工具，或回复 DONE 结束。",
+                    })
 
         # 完成批次
         self.db.complete_batch(self.batch_id, self.operation_count)
         return self.operation_count
 
-    def _call_ollama(self, messages: list) -> dict:
+    def _call_ollama(self, messages: list) -> str:
         """
-        调用 Ollama chat API（原生 tool calling）。
+        调用 Ollama Chat API。
 
         Args:
             messages: 对话历史
 
         Returns:
-            Ollama 响应 dict
+            模型回复的文本内容
         """
         url = f"{self.config.model.base_url}/api/chat"
         payload = {
             "model": self.config.model.name,
             "messages": messages,
-            "tools": self.tools,
             "stream": False,
+            "think": False,
             "options": {
                 "temperature": 0.3,
-                "num_predict": 4096,      # 足够的 token 预算给 tool calling
+                "num_predict": 4096,
             },
-            "think": False,               # 关闭 thinking，避免思考占满输出
         }
 
         try:
             resp = requests.post(url, json=payload, timeout=self.config.model.timeout)
             resp.raise_for_status()
-            return resp.json()
+            result = resp.json()
+            return result.get("message", {}).get("content", "")
         except requests.exceptions.HTTPError as e:
             error_detail = ""
             try:
@@ -353,28 +340,87 @@ class FileAgent:
             except Exception:
                 error_detail = str(e)
             logger.error(f"[Agent] Ollama 调用失败: {error_detail}")
-            return {"message": {"content": f"ERROR: {error_detail}"}}
+            return ""
         except Exception as e:
             logger.error(f"[Agent] Ollama 调用失败: {e}")
-            return {"message": {"content": f"ERROR: {e}"}}
+            return ""
 
-    def _execute_tool(self, tool_call: dict) -> str:
+    @staticmethod
+    def _parse_tool_call(text: str) -> dict | None:
         """
-        执行单个 tool 调用。
+        从模型回复文本中解析工具调用 JSON。
+
+        支持多种格式：
+        - 纯 JSON: {"tool": "...", "args": {...}}
+        - 包裹在代码块中: ```json ... ```
+        - 夹杂其他文本
+
+        Returns:
+            解析成功返回 {"tool": str, "args": dict}，否则 None
+        """
+        # 先尝试直接解析整个文本
+        try:
+            data = json.loads(text)
+            if "tool" in data:
+                return data
+        except json.JSONDecodeError:
+            pass
+
+        # 尝试从 markdown 代码块中提取
+        code_block_match = re.search(r'```(?:json)?\s*(\{[\s\S]*?\})\s*```', text)
+        if code_block_match:
+            try:
+                data = json.loads(code_block_match.group(1))
+                if "tool" in data:
+                    return data
+            except json.JSONDecodeError:
+                pass
+
+        # 尝试从文本中找第一个完整的 JSON 对象
+        json_match = re.search(r'\{[^{}]*"tool"\s*:\s*"[^"]+?"[^{}]*\}', text)
+        if json_match:
+            try:
+                data = json.loads(json_match.group(0))
+                if "tool" in data:
+                    return data
+            except json.JSONDecodeError:
+                pass
+
+        # 更宽松的匹配：嵌套一层 args
+        json_match = re.search(r'\{[\s\S]*?"tool"\s*:\s*"[\s\S]*?\}', text)
+        if json_match:
+            candidate = json_match.group(0)
+            # 找到匹配的闭合括号
+            depth = 0
+            for idx, ch in enumerate(candidate):
+                if ch == '{':
+                    depth += 1
+                elif ch == '}':
+                    depth -= 1
+                    if depth == 0:
+                        candidate = candidate[:idx + 1]
+                        break
+            try:
+                data = json.loads(candidate)
+                if "tool" in data:
+                    return data
+            except json.JSONDecodeError:
+                pass
+
+        return None
+
+    def _execute_tool(self, name: str, args: dict) -> str:
+        """
+        执行单个工具调用。
 
         Args:
-            tool_call: Ollama 返回的 tool_call 对象
+            name: 工具名称
+            args: 工具参数
 
         Returns:
             执行结果字符串（返回给 LLM）
         """
-        name = tool_call["function"]["name"]
-        try:
-            args = json.loads(tool_call["function"]["arguments"])
-        except json.JSONDecodeError:
-            return "ERROR: 参数解析失败"
-
-        # 路由到对应的 tool 实现
+        # 路由到对应的工具实现
         handler = {
             "list_files": self._tool_list_files,
             "get_file_info": self._tool_get_file_info,

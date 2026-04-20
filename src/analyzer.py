@@ -7,6 +7,7 @@ LLM 分析模块。
 
 import base64
 import json
+import logging
 import mimetypes
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,6 +17,8 @@ import requests
 from src.config import AppConfig, ModelConfig
 from src.database import Database
 from src.scanner import FileInfo
+
+logger = logging.getLogger("filesquirrel")
 
 # 支持多模态分析的图片扩展名
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp"}
@@ -85,6 +88,7 @@ class LLMAnalyzer:
 
         # 调用 Ollama
         response_text = self._call_ollama(prompt)
+        logger.debug(f"模型响应: {response_text[:500]}")
 
         # 解析响应
         return self._parse_response(file_info, response_text)
@@ -101,10 +105,13 @@ class LLMAnalyzer:
             整理决策列表
         """
         decisions = []
-        for f in files:
+        total = len(files)
+        for idx, f in enumerate(files, 1):
+            logger.debug(f"[{idx}/{total}] 分析: {f.relative_path}")
             try:
                 decision = self.analyze_file(f, dir_structure)
                 decisions.append(decision)
+                logger.debug(f"[{idx}/{total}] 完成: {f.relative_path} → {decision.target_path}")
             except Exception as e:
                 # 单个文件分析失败不影响整体流程
                 decisions.append(OrganizeDecision(
@@ -220,7 +227,7 @@ class LLMAnalyzer:
     def _call_ollama(self, prompt: str, image_base64: str | None = None,
                      image_mime: str = "image/png") -> str:
         """
-        调用 Ollama API 生成响应。
+        调用 Ollama Chat API 生成响应。
 
         Args:
             prompt: 文本 prompt
@@ -230,28 +237,34 @@ class LLMAnalyzer:
         Returns:
             模型的文本响应
         """
-        url = f"{self.model.base_url}/api/generate"
+        url = f"{self.model.base_url}/api/chat"
 
-        # 构建请求体
+        # 构建 messages
+        messages = [{"role": "user", "content": prompt}]
+        # 如果有图片，构建多模态消息
+        if image_base64:
+            messages = [{
+                "role": "user",
+                "content": prompt,
+                "images": [image_base64],
+            }]
+
         payload = {
             "model": self.model.name,
-            "prompt": prompt,
+            "messages": messages,
             "stream": False,
+            "think": False,          # 禁用思考模式，直接输出
             "options": {
-                "temperature": 0.3,    # 低温度，保证决策稳定
-                "num_predict": 512,    # 限制输出长度
+                "temperature": 0.3,  # 低温度，保证决策稳定
+                "num_predict": 512,  # 限制输出长度
             },
         }
-
-        # 如果有图片，添加到 prompt 中
-        if image_base64:
-            payload["images"] = [image_base64]
 
         response = requests.post(url, json=payload, timeout=self.model.timeout)
         response.raise_for_status()
 
         result = response.json()
-        return result.get("response", "")
+        return result.get("message", {}).get("content", "")
 
     def _call_ollama_multimodal(self, prompt: str, image_base64: str,
                                 image_mime: str = "image/png") -> str:
