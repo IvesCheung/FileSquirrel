@@ -1,5 +1,7 @@
 # FileSquirrel 🐿️
 
+**[English](README_EN.md)** | 中文
+
 基于本地大模型的自动文件整理工具。通过 Ollama 调用本地 LLM，自动对指定目录下的文件进行分类、重命名、归档。
 
 ## Quick Start
